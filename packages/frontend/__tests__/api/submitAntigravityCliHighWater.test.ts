@@ -1810,7 +1810,7 @@ describe("POST /api/submit Antigravity family cost floors", () => {
     expect(storedCost(store)).toBeCloseTo(10, 8);
   });
 
-  it("applies the Antigravity family cost deficit once across sources", async () => {
+  it("floors the family lifetime once: known per-model spend is not stacked", async () => {
     const store = newStore();
     await submitFamily(store, familySnapshotBody([
       { date: "2026-08-07", costIsComplete: true, models: [
@@ -1818,19 +1818,25 @@ describe("POST /api/submit Antigravity family cost floors", () => {
       ] },
     ]));
 
-    // Replacement: a COMPLETE extension cell already carrying $10 plus an
-    // INCOMPLETE desktop cell at $0. Independent per-client floors would
-    // stack the old $10 on top; the family floor counts the complete cell
-    // toward the total instead.
+    // The replacement reports the old model unpriced (incomplete, $0) plus a
+    // newly priced model at $5. The family floor is a LIFETIME scalar, not a
+    // per-model preservation: the known total $10 stands, the $5 counts
+    // toward it, and the $5 deficit lands on the incomplete cell. Per-model
+    // floors would stack to $15.
     await submitFamily(store, familySnapshotBody([
-      { date: "2026-08-07", costIsComplete: true, models: [
-        { client: "antigravity-extension", modelId: "gemini-3-pro", tokens: 60, cost: 10, messages: 1 },
-      ] },
       { date: "2026-08-08", costIsComplete: false, models: [
-        { client: "antigravity-cli", modelId: "gemini-3-pro", tokens: 40, cost: 0, messages: 1 },
+        { client: "antigravity-cli", modelId: "gemini-3-pro", tokens: 60, cost: 0, messages: 1 },
+      ] },
+      { date: "2026-08-09", costIsComplete: true, models: [
+        { client: "antigravity-extension", modelId: "gemini-3-pro", tokens: 40, cost: 5, messages: 1 },
       ] },
     ]));
+    expect(storedTokens(store)).toBe(100);
     expect(storedCost(store)).toBeCloseTo(10, 8);
+    const cliDay = store.days.find((day) => day.sourceBreakdown["antigravity-cli"])!;
+    expect(cliDay.sourceBreakdown["antigravity-cli"]!.cost).toBeCloseTo(5, 8);
+    const extensionDay = store.days.find((day) => day.sourceBreakdown["antigravity-extension"])!;
+    expect(extensionDay.sourceBreakdown["antigravity-extension"]!.cost).toBeCloseTo(5, 8);
   });
 
   it("keeps complete Antigravity cells exact while flooring only incomplete cells", async () => {

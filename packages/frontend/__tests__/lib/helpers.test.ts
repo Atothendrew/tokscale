@@ -350,8 +350,11 @@ describe("reapplyReplaceFamilyCostFloor", () => {
         ? {}
         : {
             provenance: {
+              schemaVersion: 2,
+              messageCount: 1,
+              modelCount: 1,
               costIsComplete: false,
-            } as NonNullable<ClientBreakdownData["provenance"]>,
+            },
           }),
     };
   }

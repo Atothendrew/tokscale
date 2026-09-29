@@ -89,7 +89,7 @@ describe("planAntigravityTransition incomplete-pricing admission", () => {
     expect(plan.parserVersions).toEqual({ "antigravity-cli": GEN + 1 });
   });
 
-  it("still freezes an older stored generation against admission", () => {
+  it("still freezes admission when a stored family generation is newer than supported", () => {
     const args = baseArgs();
     args.persistedVersions = { "antigravity-extension": GEN + 1 };
     const plan = planAntigravityTransition(args);

@@ -919,10 +919,10 @@ fn merge_claude_duplicate(
     t.cache_write = t
         .cache_write
         .max(usage.cache_creation_input_tokens.unwrap_or(0).max(0));
-    t.cache_write_1h = t
-        .cache_write_1h
-        .max(usage.cache_write_1h_raw())
-        .min(t.cache_write);
+    // No clamp against the running total here: an intermediate partial total
+    // would discard a larger split before a later duplicate supplies the full
+    // total. The invariant is restored once per file after duplicate assembly.
+    t.cache_write_1h = t.cache_write_1h.max(usage.cache_write_1h_raw());
 
     if let Some(timestamp_ms) = parsed_timestamp {
         if timestamp_ms >= existing.timestamp {
