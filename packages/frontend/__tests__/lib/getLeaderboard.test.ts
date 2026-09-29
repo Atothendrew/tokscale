@@ -69,6 +69,14 @@ function allSql() {
 function finalSql() {
   return text(state.queries.at(-1));
 }
+/** The body of one CTE: from `<name> AS (` up to the next CTE's `<next> AS (`. */
+function cte(sql: string, name: string, next: string) {
+  const start = sql.indexOf(`${name} AS (`);
+  const end = sql.indexOf(`${next} AS (`, start);
+  expect(start, `${name} CTE missing`).toBeGreaterThanOrEqual(0);
+  expect(end, `${next} CTE missing after ${name}`).toBeGreaterThan(start);
+  return sql.slice(start, end);
+}
 function row(
   users: unknown,
   stats = { totalUsers: 0, totalTokens: 0, totalCost: 0, uniqueUsers: 0 },
@@ -113,22 +121,29 @@ describe("period leaderboard aggregate query", () => {
     expect(finalSql()).not.toContain("stat_rows AS");
   });
 
-  it("keeps hidden users in totals while excluding them before rank and page", async () => {
+  it("excludes hidden users from the totals as well as the rank and page", async () => {
     state.results.push(
       row([], {
         totalUsers: 1,
         totalTokens: 300,
         totalCost: 30,
-        uniqueUsers: 2,
+        uniqueUsers: 1,
       }),
     );
     const data = await getLeaderboardData("week", 1, 50);
     expect(data.stats).toEqual({
       totalTokens: 300,
       totalCost: 30,
-      uniqueUsers: 2,
+      uniqueUsers: 1,
     });
-    expect(allSql()).toContain("WHERE leaderboard_hidden = false");
+    // Each CTE is checked on its own: a single filter anywhere in the
+    // statement would satisfy a whole-query toContain.
+    expect(cte(finalSql(), "stats", "rankable")).toContain(
+      "WHERE leaderboard_hidden = false",
+    );
+    expect(cte(finalSql(), "rankable", "filtered")).toContain(
+      "WHERE leaderboard_hidden = false",
+    );
   });
 
   it("scopes client and model directives in the same JSON client entry", async () => {
