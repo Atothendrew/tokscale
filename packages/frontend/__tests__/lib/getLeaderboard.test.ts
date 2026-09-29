@@ -1,5 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { cteBody } from "../support/sqlCte";
+
 const state = vi.hoisted(() => {
   const results: Array<unknown> = [];
   const queries: Array<{ strings: string[]; values: unknown[] }> = [];
@@ -69,14 +71,6 @@ function allSql() {
 function finalSql() {
   return text(state.queries.at(-1));
 }
-/** The body of one CTE: from `<name> AS (` up to the next CTE's `<next> AS (`. */
-function cte(sql: string, name: string, next: string) {
-  const start = sql.indexOf(`${name} AS (`);
-  const end = sql.indexOf(`${next} AS (`, start);
-  expect(start, `${name} CTE missing`).toBeGreaterThanOrEqual(0);
-  expect(end, `${next} CTE missing after ${name}`).toBeGreaterThan(start);
-  return sql.slice(start, end);
-}
 function row(
   users: unknown,
   stats = { totalUsers: 0, totalTokens: 0, totalCost: 0, uniqueUsers: 0 },
@@ -138,10 +132,10 @@ describe("period leaderboard aggregate query", () => {
     });
     // Each CTE is checked on its own: a single filter anywhere in the
     // statement would satisfy a whole-query toContain.
-    expect(cte(finalSql(), "stats", "rankable")).toContain(
+    expect(cteBody(finalSql(), "stats", "rankable")).toContain(
       "WHERE leaderboard_hidden = false",
     );
-    expect(cte(finalSql(), "rankable", "filtered")).toContain(
+    expect(cteBody(finalSql(), "rankable", "filtered")).toContain(
       "WHERE leaderboard_hidden = false",
     );
   });
