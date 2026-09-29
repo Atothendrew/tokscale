@@ -37,10 +37,10 @@ function fullTrioVersions() {
     (["antigravity", "antigravity-cli", "antigravity-extension"] as const).map(
       (client) => [client, SUPPORTED_VERSIONED_PARSERS[client]]
     )
-  ) as Record<string, number>;
+  );
 }
 
-function baseArgs() {
+function baseArgs(): Parameters<typeof planAntigravityTransition>[0] {
   return {
     submittedClients: new Set<string>(["antigravity-cli", "antigravity-extension"]),
     incomingVersions: fullTrioVersions(),
@@ -48,8 +48,8 @@ function baseArgs() {
     parserStates: undefined,
     fullHistory: true,
     isBackfill: false,
-    contributions: [] as ReturnType<typeof day>[],
-    existingDays: [] as unknown[],
+    contributions: [],
+    existingDays: [],
   };
 }
 

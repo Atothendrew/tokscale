@@ -346,7 +346,13 @@ describe("reapplyReplaceFamilyCostFloor", () => {
           messages: tokens,
         },
       },
-      ...(complete ? {} : { provenance: { costIsComplete: false } }),
+      ...(complete
+        ? {}
+        : {
+            provenance: {
+              costIsComplete: false,
+            } as NonNullable<ClientBreakdownData["provenance"]>,
+          }),
     };
   }
 
@@ -420,7 +426,7 @@ describe("reapplyReplaceFamilyCostFloor", () => {
   });
 
   it("spreads a fractional deficit deterministically across dates and members", () => {
-    const rows = [
+    const rows: Array<{ sourceBreakdown: Record<string, ClientBreakdownData> }> = [
       {
         sourceBreakdown: {
           "antigravity-cli": cell(10, 0, false),
@@ -440,7 +446,7 @@ describe("reapplyReplaceFamilyCostFloor", () => {
     expect(second).toBeCloseTo(0.075, 8);
 
     // Replay with the same shapes reproduces the same placement.
-    const replay = [
+    const replay: Array<{ sourceBreakdown: Record<string, ClientBreakdownData> }> = [
       {
         sourceBreakdown: {
           "antigravity-cli": cell(10, 0, false),
