@@ -413,6 +413,9 @@ pub enum MessageKey {
     ButtonUseAccount,
     ButtonRemove,
     ButtonReset,
+    ButtonUseAccountShort,
+    ButtonRemoveShort,
+    ButtonResetShort,
 
     // Usage: limits, metrics and the snapshot line
     UsageNoLimits,
@@ -806,6 +809,9 @@ const fn tr_en(key: MessageKey) -> &'static str {
         MessageKey::ButtonUseAccount => "Use Account",
         MessageKey::ButtonRemove => "Remove",
         MessageKey::ButtonReset => "Reset",
+        MessageKey::ButtonUseAccountShort => "Use",
+        MessageKey::ButtonRemoveShort => "Remove",
+        MessageKey::ButtonResetShort => "Reset",
 
         // Usage: limits, metrics and the snapshot line
         MessageKey::UsageNoLimits => "No limits",
@@ -1215,6 +1221,9 @@ const fn tr_ko(key: MessageKey) -> Option<&'static str> {
         MessageKey::ButtonUseAccount => "이 계정 사용",
         MessageKey::ButtonRemove => "삭제",
         MessageKey::ButtonReset => "초기화",
+        MessageKey::ButtonUseAccountShort => "사용",
+        MessageKey::ButtonRemoveShort => "삭제",
+        MessageKey::ButtonResetShort => "초기화",
 
         // Usage: limits, metrics and the snapshot line
         MessageKey::UsageNoLimits => "한도 정보 없음",
@@ -1608,6 +1617,9 @@ const fn tr_ja(key: MessageKey) -> Option<&'static str> {
         MessageKey::ButtonUseAccount => "このアカウントを使用",
         MessageKey::ButtonRemove => "削除",
         MessageKey::ButtonReset => "リセット",
+        MessageKey::ButtonUseAccountShort => "使用",
+        MessageKey::ButtonRemoveShort => "削除",
+        MessageKey::ButtonResetShort => "リセット",
 
         // Usage: limits, metrics and the snapshot line
         MessageKey::UsageNoLimits => "制限なし",
@@ -1993,6 +2005,9 @@ const fn tr_zh_cn(key: MessageKey) -> Option<&'static str> {
         MessageKey::ButtonUseAccount => "使用此账户",
         MessageKey::ButtonRemove => "移除",
         MessageKey::ButtonReset => "重置",
+        MessageKey::ButtonUseAccountShort => "使用",
+        MessageKey::ButtonRemoveShort => "移除",
+        MessageKey::ButtonResetShort => "重置",
 
         // Usage: limits, metrics and the snapshot line
         MessageKey::UsageNoLimits => "无限制信息",
@@ -2383,6 +2398,9 @@ const fn tr_fr(key: MessageKey) -> Option<&'static str> {
         MessageKey::ButtonUseAccount => "Utiliser ce compte",
         MessageKey::ButtonRemove => "Supprimer",
         MessageKey::ButtonReset => "Réinitialiser",
+        MessageKey::ButtonUseAccountShort => "Utiliser",
+        MessageKey::ButtonRemoveShort => "Suppr.",
+        MessageKey::ButtonResetShort => "Réinit.",
 
         // Usage: limits, metrics and the snapshot line
         MessageKey::UsageNoLimits => "Aucune limite",
@@ -2857,6 +2875,9 @@ mod tests {
             MessageKey::ButtonUseAccount,
             MessageKey::ButtonRemove,
             MessageKey::ButtonReset,
+            MessageKey::ButtonUseAccountShort,
+            MessageKey::ButtonRemoveShort,
+            MessageKey::ButtonResetShort,
             MessageKey::UsageNoLimits,
             MessageKey::UsageNoQuotaMetrics,
             MessageKey::UsageNoQuotaMetricsReturned,

@@ -16,6 +16,9 @@ use crate::tui::ui::widgets::{
 
 struct ButtonSpec {
     label: String,
+    /// Compact catalog form for narrow rows: a translation wider than
+    /// English must not cost the user the action (`push_click_buttons`).
+    short_label: Option<String>,
     kind: ButtonKind,
     action: ClickAction,
 }
@@ -539,6 +542,14 @@ fn selected_reset_action_button(app: &App) -> Option<ActionBarButton> {
     })
 }
 
+/// Place the row's action buttons, keeping every action clickable.
+///
+/// Full labels are tried first: when everything fits, the row is byte-for-byte
+/// the historical layout. A translation wider than English must not cost the
+/// user an action — there is no keyboard alternative for these — so compact
+/// labels come next, and as a last resort labels are truncated with the
+/// width-stable `⋯` marker at an equal share of the row. A button is never
+/// dropped for width.
 fn push_click_buttons(
     spans: &mut Vec<Span<'static>>,
     app: &mut App,
@@ -547,9 +558,40 @@ fn push_click_buttons(
     y: u16,
     right_edge: u16,
 ) {
+    let full: Vec<String> = buttons.iter().map(|b| b.label.clone()).collect();
+    let compact: Vec<String> = buttons
+        .iter()
+        .map(|b| b.short_label.clone().unwrap_or_else(|| b.label.clone()))
+        .collect();
+    let total_width = |labels: &[String]| {
+        labels
+            .iter()
+            .map(|label| display_width(label) as u16 + 2)
+            .sum::<u16>()
+            .saturating_add(labels.len().saturating_sub(1) as u16)
+    };
+    let available = right_edge.saturating_sub(start_x);
+    let labels = if total_width(&full) <= available {
+        full
+    } else if total_width(&compact) <= available {
+        compact
+    } else {
+        // Equal shares of what is left, so no button monopolizes the row
+        // while a later one is squeezed out of its click target.
+        let count = buttons.len().max(1) as u16;
+        let text_budget = available
+            .saturating_sub(buttons.len().saturating_sub(1) as u16)
+            .saturating_sub(2 * count);
+        let share = (text_budget / count).max(1) as usize;
+        compact
+            .into_iter()
+            .map(|label| truncate_string(&label, share))
+            .collect()
+    };
+
     let mut x = start_x;
     for (index, button) in buttons.into_iter().enumerate() {
-        let rendered = button_label(&button.label);
+        let rendered = button_label(&labels[index]);
         let width = Line::from(rendered.as_str()).width() as u16;
         let separator_width = u16::from(index > 0);
         if x.saturating_add(separator_width).saturating_add(width) > right_edge {
@@ -2532,6 +2574,7 @@ fn account_table_row_style(app: &App, index: usize) -> Style {
 fn use_account_button(lang: TuiLanguage, account_id: &str) -> ButtonSpec {
     ButtonSpec {
         label: tr(lang, MessageKey::ButtonUseAccount).to_string(),
+        short_label: Some(tr(lang, MessageKey::ButtonUseAccountShort).to_string()),
         kind: ButtonKind::Primary,
         action: ClickAction::CodexUseAccount {
             account_id: account_id.to_string(),
@@ -2542,6 +2585,7 @@ fn use_account_button(lang: TuiLanguage, account_id: &str) -> ButtonSpec {
 fn remove_account_button(lang: TuiLanguage, account_id: &str) -> ButtonSpec {
     ButtonSpec {
         label: tr(lang, MessageKey::ButtonRemove).to_string(),
+        short_label: Some(tr(lang, MessageKey::ButtonRemoveShort).to_string()),
         kind: ButtonKind::Danger,
         action: ClickAction::CodexRemoveAccount {
             account_id: account_id.to_string(),
@@ -2552,6 +2596,7 @@ fn remove_account_button(lang: TuiLanguage, account_id: &str) -> ButtonSpec {
 fn reset_account_button(lang: TuiLanguage, account_id: &str) -> ButtonSpec {
     ButtonSpec {
         label: tr(lang, MessageKey::ButtonReset).to_string(),
+        short_label: Some(tr(lang, MessageKey::ButtonResetShort).to_string()),
         kind: ButtonKind::Warning,
         action: ClickAction::CodexResetAccount {
             account_id: account_id.to_string(),
@@ -5242,6 +5287,96 @@ mod tests {
                         area.rect.x,
                         area.rect.width,
                     );
+                }
+            }
+        }
+    }
+
+    /// #1371 review follow-up: the selected-account row's Use/Reset/Remove
+    /// buttons are the only way to manage saved accounts — no keyboard
+    /// bindings exist for them — so a translation wider than English must not
+    /// cost the user an action there either. Before the compact-label ladder,
+    /// ja lost Remove at 40 columns and fr lost Reset/Remove at 40 (Remove
+    /// still gone at 48).
+    #[test]
+    fn selected_account_actions_never_show_fewer_buttons_than_english() {
+        // Scope to the selected-account panel: the top action bar also owns a
+        // Reset button (hint-only at narrow widths in some languages), which
+        // follows its own >= policy (`the_compact_action_bar_never_shows_...`).
+        let account_actions = |app: &App| -> Vec<String> {
+            app.click_areas
+                .iter()
+                .filter(|area| {
+                    area.rect.y > 1
+                        && matches!(
+                            area.action,
+                            ClickAction::CodexUseAccount { .. }
+                                | ClickAction::CodexResetAccount { .. }
+                                | ClickAction::CodexRemoveAccount { .. }
+                        )
+                })
+                .map(|area| format!("{:?}", area.action))
+                .collect()
+        };
+        let saved_inactive = || UsageAccount {
+            id: "acct_saved".to_string(),
+            label: Some("saved".to_string()),
+            is_active: false,
+        };
+        let usage = |with_reset_credit: bool| {
+            vec![if with_reset_credit {
+                output_with_reset_credits(
+                    "Codex",
+                    Some(saved_inactive()),
+                    1,
+                    &far_future_reset_timestamp(),
+                )
+            } else {
+                output("Codex", Some(saved_inactive()))
+            }]
+        };
+
+        for width in 32..=72u16 {
+            for with_reset_credit in [true, false] {
+                let mut english = make_app();
+                english.subscription_usage = usage(with_reset_credit);
+                let english_rows = rendered_rows(&mut english, width, 24);
+                let expected = account_actions(&english);
+                assert_eq!(
+                    expected.len(),
+                    if with_reset_credit { 3 } else { 2 },
+                    "en at width {width} must place Use/Remove plus Reset when a credit exists"
+                );
+
+                for lang in TuiLanguage::ALL {
+                    let mut app = make_app();
+                    app.settings.tui_language = lang;
+                    app.subscription_usage = usage(with_reset_credit);
+                    let rows = rendered_rows(&mut app, width, 24);
+                    let actual = account_actions(&app);
+                    assert_eq!(
+                        actual, expected,
+                        "{} at width {width} (reset credit: {with_reset_credit}) lost or                          reordered selected-account actions; there is no keyboard                          alternative.\nen: |{english_rows:?}|\n{}: |{rows:?}|",
+                        lang.code(),
+                        lang.code(),
+                    );
+                    for area in app.click_areas.iter().filter(|area| {
+                        area.rect.y > 1
+                            && matches!(
+                                area.action,
+                                ClickAction::CodexUseAccount { .. }
+                                    | ClickAction::CodexResetAccount { .. }
+                                    | ClickAction::CodexRemoveAccount { .. }
+                            )
+                    }) {
+                        assert!(
+                            area.rect.x + area.rect.width <= width,
+                            "{} at width {width}: an account click area runs past the row:                              x={} w={}",
+                            lang.code(),
+                            area.rect.x,
+                            area.rect.width,
+                        );
+                    }
                 }
             }
         }
