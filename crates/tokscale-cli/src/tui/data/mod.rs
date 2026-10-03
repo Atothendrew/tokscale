@@ -57,6 +57,23 @@ pub struct ModelUsage {
     pub cost: f64,
     pub performance: ModelPerformance,
     pub session_count: u32,
+    /// The aggregation key this row was grouped under. Unlike the display
+    /// fields it is unique per row under every `GroupBy`, including the
+    /// session groupings, so it can identify a row across refreshes.
+    pub group_key: String,
+    /// This row's usage split by day, oldest first. Recomputed on every load
+    /// and not round-tripped through the TUI cache, like sessions.
+    pub daily: Vec<ModelDayUsage>,
+}
+
+/// One day of one Models-tab row, for the per-model daily trend view.
+#[derive(Debug, Clone)]
+pub struct ModelDayUsage {
+    pub date: NaiveDate,
+    pub tokens: TokenBreakdown,
+    pub cost: f64,
+    pub messages: u64,
+    pub performance: ModelPerformance,
 }
 
 #[derive(Debug, Clone)]
@@ -528,6 +545,7 @@ impl DataLoader {
         let mut hourly_map: HashMap<NaiveDateTime, HourlyUsage> = HashMap::new();
         let mut minutely_map: HashMap<NaiveDateTime, MinutelyUsage> = HashMap::new();
         let mut model_session_ids: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut model_days: HashMap<String, BTreeMap<NaiveDate, ModelDayUsage>> = HashMap::new();
         let mut session_map: HashMap<String, SessionUsage> = HashMap::new();
         let mut project_map: HashMap<String, ProjectUsage> = HashMap::new();
         let mut project_session_ids: HashMap<String, HashSet<String>> = HashMap::new();
@@ -679,6 +697,8 @@ impl DataLoader {
                 cost: 0.0,
                 performance: ModelPerformance::default(),
                 session_count: 0,
+                group_key: key.clone(),
+                daily: Vec::new(),
             });
 
             if merge_clients && !model_entry.client.split(", ").any(|s| s == msg.client) {
@@ -723,6 +743,47 @@ impl DataLoader {
             model_entry
                 .performance
                 .record_message(positive_unified_token_total(&msg.tokens), msg.duration_ms);
+
+            if let Some(date) = parse_date(&msg.date) {
+                let model_day = model_days
+                    .entry(key.clone())
+                    .or_default()
+                    .entry(date)
+                    .or_insert_with(|| ModelDayUsage {
+                        date,
+                        tokens: TokenBreakdown::default(),
+                        cost: 0.0,
+                        messages: 0,
+                        performance: ModelPerformance::default(),
+                    });
+                model_day.tokens.input = model_day
+                    .tokens
+                    .input
+                    .saturating_add(msg.tokens.input.max(0) as u64);
+                model_day.tokens.output = model_day
+                    .tokens
+                    .output
+                    .saturating_add(msg.tokens.output.max(0) as u64);
+                model_day.tokens.cache_read = model_day
+                    .tokens
+                    .cache_read
+                    .saturating_add(msg.tokens.cache_read.max(0) as u64);
+                model_day.tokens.cache_write = model_day
+                    .tokens
+                    .cache_write
+                    .saturating_add(msg.tokens.cache_write.max(0) as u64);
+                model_day.tokens.reasoning = model_day
+                    .tokens
+                    .reasoning
+                    .saturating_add(msg.tokens.reasoning.max(0) as u64);
+                model_day.cost += msg_cost;
+                model_day.messages = model_day
+                    .messages
+                    .saturating_add(msg.message_count.max(0) as u64);
+                model_day
+                    .performance
+                    .record_message(positive_unified_token_total(&msg.tokens), msg.duration_ms);
+            }
 
             // A recovered daily floor has a synthetic session id; it adds usage
             // but is not a session, so it must not raise session counts.
@@ -1273,6 +1334,15 @@ impl DataLoader {
             .into_values()
             .map(|mut model| {
                 model.performance.finalize(model.tokens.total() as i64);
+                model.daily = model_days
+                    .remove(&model.group_key)
+                    .unwrap_or_default()
+                    .into_values()
+                    .map(|mut day| {
+                        day.performance.finalize(day.tokens.total() as i64);
+                        day
+                    })
+                    .collect();
                 model
             })
             .collect();
@@ -2457,9 +2527,51 @@ mod tests {
         assert!((day_one.token_coverage - 0.5).abs() < 1e-9);
         assert_eq!(speed_on("2025-01-02").ms_per_1k_tokens, Some(1000.0));
 
-        // The Models tab sees the same messages across both days.
-        assert_eq!(usage.models[0].performance.timed_tokens, 30);
-        assert_eq!(usage.models[0].performance.total_duration_ms, 45);
+        // The Models tab sees the same messages across both days, and its
+        // per-day trend matches the Daily tab day for day.
+        let model = &usage.models[0];
+        assert_eq!(model.performance.timed_tokens, 30);
+        assert_eq!(model.performance.total_duration_ms, 45);
+        let trend: Vec<(String, Option<f64>, u64)> = model
+            .daily
+            .iter()
+            .map(|day| {
+                (
+                    day.date.to_string(),
+                    day.performance.ms_per_1k_tokens,
+                    day.tokens.total(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            trend,
+            [
+                ("2025-01-01".to_string(), Some(2000.0), 30),
+                ("2025-01-02".to_string(), Some(1000.0), 15),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_aggregate_messages_keeps_session_rows_trends_apart() {
+        // Session grouping yields two Models rows with identical display
+        // fields; the group key keeps their trends from merging.
+        let usage = DataLoader::new(None)
+            .aggregate_messages(
+                vec![
+                    make_workspace_message("claude", "kimi-k2", "moonshot", "s1", 1.0, None, None),
+                    make_workspace_message("claude", "kimi-k2", "moonshot", "s2", 2.0, None, None),
+                ],
+                &GroupBy::Session,
+            )
+            .unwrap();
+
+        assert_eq!(usage.models.len(), 2);
+        assert_ne!(usage.models[0].group_key, usage.models[1].group_key);
+        for model in &usage.models {
+            assert_eq!(model.daily.len(), 1);
+            assert_eq!(model.daily[0].cost, model.cost);
+        }
     }
 
     #[test]

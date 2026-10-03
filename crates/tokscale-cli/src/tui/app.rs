@@ -19,8 +19,8 @@ use super::codex_login::{
     CodexLoginOutcome,
 };
 use super::data::{
-    AgentUsage, DailyUsage, DataLoader, HourlyUsage, MinutelyUsage, ModelUsage, MonthlyUsage,
-    ProjectUsage, SessionUsage, TokenBreakdown, UsageData,
+    AgentUsage, DailyUsage, DataLoader, HourlyUsage, MinutelyUsage, ModelDayUsage, ModelUsage,
+    MonthlyUsage, ProjectUsage, SessionUsage, TokenBreakdown, UsageData,
 };
 use super::i18n::{tr, MessageKey, TuiLanguage};
 use super::privacy::looks_like_email;
@@ -347,6 +347,12 @@ pub struct App {
     monthly_list_selected_index: usize,
     monthly_list_scroll_offset: usize,
 
+    /// `ModelUsage::group_key` of the Models row whose daily trend is open.
+    pub selected_model_trend: Option<String>,
+    models_list_selected_index: usize,
+    models_list_scroll_offset: usize,
+    models_list_sort: (SortField, SortDirection),
+
     pub selected_graph_cell: Option<(usize, usize)>,
     pub stats_breakdown_total_lines: usize,
 
@@ -506,6 +512,10 @@ impl App {
             selected_monthly_detail_month: None,
             monthly_list_selected_index: 0,
             monthly_list_scroll_offset: 0,
+            selected_model_trend: None,
+            models_list_selected_index: 0,
+            models_list_scroll_offset: 0,
+            models_list_sort: (SortField::Cost, SortDirection::Descending),
             selected_graph_cell: None,
             stats_breakdown_total_lines: 0,
             auto_refresh,
@@ -594,6 +604,17 @@ impl App {
                 self.selected_daily_detail_date = None;
                 self.selected_index = self.daily_list_selected_index;
                 self.scroll_offset = self.daily_list_scroll_offset;
+            }
+        }
+
+        // Same for the model trend: exit if its Models row disappeared, e.g.
+        // after a source or grouping change.
+        if let Some(ref key) = self.selected_model_trend {
+            if !self.data.models.iter().any(|m| &m.group_key == key) {
+                self.selected_model_trend = None;
+                (self.sort_field, self.sort_direction) = self.models_list_sort;
+                self.selected_index = self.models_list_selected_index;
+                self.scroll_offset = self.models_list_scroll_offset;
             }
         }
 
@@ -1008,6 +1029,9 @@ impl App {
             KeyCode::Enter if self.current_tab == Tab::Monthly => {
                 self.open_selected_monthly_detail();
             }
+            KeyCode::Enter if self.current_tab == Tab::Models => {
+                self.open_selected_model_trend();
+            }
             KeyCode::Enter if self.current_tab == Tab::Stats => {
                 self.handle_graph_selection();
             }
@@ -1020,6 +1044,11 @@ impl App {
                 if self.current_tab == Tab::Monthly && self.is_monthly_detail_active() =>
             {
                 self.close_monthly_detail();
+            }
+            KeyCode::Esc | KeyCode::Backspace
+                if self.current_tab == Tab::Models && self.is_model_trend_active() =>
+            {
+                self.close_model_trend();
             }
             KeyCode::Esc if self.selected_graph_cell.is_some() => {
                 self.selected_graph_cell = None;
@@ -1672,6 +1701,9 @@ impl App {
         self.selected_monthly_detail_month = None;
         self.monthly_list_selected_index = 0;
         self.monthly_list_scroll_offset = 0;
+        self.selected_model_trend = None;
+        self.models_list_selected_index = 0;
+        self.models_list_scroll_offset = 0;
         self.selected_graph_cell = None;
         self.stats_breakdown_total_lines = 0;
     }
@@ -1685,6 +1717,9 @@ impl App {
         }
         if target != Tab::Monthly {
             self.selected_monthly_detail_month = None;
+        }
+        if target != Tab::Models {
+            self.selected_model_trend = None;
         }
 
         let (field, dir) = self
@@ -1737,6 +1772,11 @@ impl App {
     }
 
     fn persist_current_sort(&mut self) {
+        // The model trend borrows the Models tab's sort fields; its own sort
+        // is not the Models list's, so it is never saved as that tab's.
+        if self.current_tab == Tab::Models && self.is_model_trend_active() {
+            return;
+        }
         self.tab_sort_state
             .insert(self.current_tab, (self.sort_field, self.sort_direction));
     }
@@ -1850,6 +1890,7 @@ impl App {
 
     fn get_current_list_len(&self) -> usize {
         match self.current_tab {
+            Tab::Models if self.is_model_trend_active() => self.get_sorted_model_trend_rows().len(),
             Tab::Overview | Tab::Models => self.data.models.len(),
             Tab::Agents => self.data.agents.len(),
             Tab::Daily if self.is_daily_detail_active() => {
@@ -1892,6 +1933,7 @@ impl App {
         self.persist_current_sort();
         if (self.current_tab == Tab::Daily && self.is_daily_detail_active())
             || (self.current_tab == Tab::Monthly && self.is_monthly_detail_active())
+            || (self.current_tab == Tab::Models && self.is_model_trend_active())
         {
             self.selected_index = 0;
             self.scroll_offset = 0;
@@ -2135,6 +2177,60 @@ impl App {
         self.clamp_selection();
     }
 
+    fn open_selected_model_trend(&mut self) {
+        if self.is_model_trend_active() {
+            return;
+        }
+
+        let selected = self
+            .get_sorted_models()
+            .get(self.selected_index)
+            .map(|m| (m.group_key.clone(), m.model.clone()));
+
+        if let Some((key, model)) = selected {
+            self.models_list_selected_index = self.selected_index;
+            self.models_list_scroll_offset = self.scroll_offset;
+            self.models_list_sort = (self.sort_field, self.sort_direction);
+            self.selected_model_trend = Some(key);
+            // A trend reads oldest-to-newest top-down as newest first, like the
+            // Daily tab; the Models sort is restored on the way out.
+            self.sort_field = SortField::Date;
+            self.sort_direction = SortDirection::Descending;
+            self.selected_index = 0;
+            self.scroll_offset = 0;
+            self.set_status(&format!("Viewing daily trend for {}", model));
+            self.clamp_selection();
+        }
+    }
+
+    fn close_model_trend(&mut self) {
+        let Some(key) = self.selected_model_trend.take() else {
+            return;
+        };
+
+        (self.sort_field, self.sort_direction) = self.models_list_sort;
+
+        let restored_index = self
+            .get_sorted_models()
+            .iter()
+            .position(|m| m.group_key == key)
+            .unwrap_or(self.models_list_selected_index);
+
+        self.selected_index = restored_index;
+
+        let max_visible = self.max_visible_items.max(1);
+        let viewport_still_holds = restored_index >= self.models_list_scroll_offset
+            && restored_index < self.models_list_scroll_offset + max_visible;
+        self.scroll_offset = if viewport_still_holds {
+            self.models_list_scroll_offset
+        } else {
+            restored_index.saturating_sub(max_visible / 2)
+        };
+
+        self.set_status("Returned to models");
+        self.clamp_selection();
+    }
+
     fn toggle_auto_refresh(&mut self) {
         self.auto_refresh = !self.auto_refresh;
         if self.auto_refresh {
@@ -2187,6 +2283,10 @@ impl App {
 
     fn copy_selected_to_clipboard(&mut self) {
         let text = match self.current_tab {
+            Tab::Models if self.is_model_trend_active() => self
+                .get_sorted_model_trend_rows()
+                .get(self.selected_index)
+                .map(|d| format!("{}: {} tokens, ${:.4}", d.date, d.tokens.total(), d.cost)),
             Tab::Overview | Tab::Models => self
                 .get_sorted_models()
                 .get(self.selected_index)
@@ -2413,6 +2513,51 @@ impl App {
 
     pub fn daily_detail_date(&self) -> Option<NaiveDate> {
         self.selected_daily_detail_date
+    }
+
+    pub fn is_model_trend_active(&self) -> bool {
+        self.selected_model_trend.is_some()
+    }
+
+    /// The Models row whose daily trend is open, if it is still loaded.
+    pub fn model_trend_model(&self) -> Option<&ModelUsage> {
+        let key = self.selected_model_trend.as_ref()?;
+        self.data.models.iter().find(|m| &m.group_key == key)
+    }
+
+    /// The open trend's days, ordered by the current sort. Date sorts are
+    /// chronological; cost and token sorts fall back to newest first.
+    pub fn get_sorted_model_trend_rows(&self) -> Vec<&ModelDayUsage> {
+        let Some(model) = self.model_trend_model() else {
+            return Vec::new();
+        };
+        let mut days: Vec<&ModelDayUsage> = model.daily.iter().collect();
+        let newest_first = |a: &&ModelDayUsage, b: &&ModelDayUsage| b.date.cmp(&a.date);
+
+        match (self.sort_field, self.sort_direction) {
+            (SortField::Cost, SortDirection::Descending) => {
+                days.sort_by(|a, b| b.cost.total_cmp(&a.cost).then_with(|| newest_first(a, b)))
+            }
+            (SortField::Cost, SortDirection::Ascending) => {
+                days.sort_by(|a, b| a.cost.total_cmp(&b.cost).then_with(|| newest_first(a, b)))
+            }
+            (SortField::Tokens, SortDirection::Descending) => days.sort_by(|a, b| {
+                b.tokens
+                    .total()
+                    .cmp(&a.tokens.total())
+                    .then_with(|| newest_first(a, b))
+            }),
+            (SortField::Tokens, SortDirection::Ascending) => days.sort_by(|a, b| {
+                a.tokens
+                    .total()
+                    .cmp(&b.tokens.total())
+                    .then_with(|| newest_first(a, b))
+            }),
+            (SortField::Date, SortDirection::Descending) => days.sort_by(newest_first),
+            (SortField::Date, SortDirection::Ascending) => days.sort_by_key(|d| d.date),
+        }
+
+        days
     }
 
     pub fn is_monthly_detail_active(&self) -> bool {
@@ -2919,6 +3064,8 @@ mod tests {
                 session_count: 1,
                 workspace_key: None,
                 workspace_label: None,
+                group_key: String::new(),
+                daily: Vec::new(),
             },
             ModelUsage {
                 model: "model2".to_string(),
@@ -2931,6 +3078,8 @@ mod tests {
                 session_count: 1,
                 workspace_key: None,
                 workspace_label: None,
+                group_key: String::new(),
+                daily: Vec::new(),
             },
         ];
 
@@ -2971,6 +3120,8 @@ mod tests {
                 session_count: 1,
                 workspace_key: None,
                 workspace_label: None,
+                group_key: String::new(),
+                daily: Vec::new(),
             },
             ModelUsage {
                 model: "model2".to_string(),
@@ -2983,6 +3134,8 @@ mod tests {
                 session_count: 1,
                 workspace_key: None,
                 workspace_label: None,
+                group_key: String::new(),
+                daily: Vec::new(),
             },
         ];
 
@@ -3022,6 +3175,8 @@ mod tests {
             session_count: 1,
             workspace_key: None,
             workspace_label: None,
+            group_key: String::new(),
+            daily: Vec::new(),
         }];
 
         // Set selection beyond bounds
@@ -3332,6 +3487,8 @@ mod tests {
                 session_count: 1,
                 workspace_key: None,
                 workspace_label: None,
+                group_key: String::new(),
+                daily: Vec::new(),
             })
             .collect();
         app
@@ -4005,6 +4162,102 @@ mod tests {
         assert_eq!(app.selected_index, 1);
         assert_eq!(app.scroll_offset, 1);
         assert_eq!(app.get_current_list_len(), 3);
+    }
+
+    fn trend_model(name: &str, cost: f64, days: &[&str]) -> ModelUsage {
+        ModelUsage {
+            model: name.to_string(),
+            color_key: name.to_string(),
+            provider: "anthropic".to_string(),
+            client: "claude".to_string(),
+            workspace_key: None,
+            workspace_label: None,
+            tokens: TokenBreakdown::default(),
+            cost,
+            performance: Default::default(),
+            session_count: 1,
+            group_key: format!("key:{name}"),
+            daily: days
+                .iter()
+                .map(|date| ModelDayUsage {
+                    date: NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap(),
+                    tokens: TokenBreakdown::default(),
+                    cost: 1.0,
+                    messages: 1,
+                    performance: Default::default(),
+                })
+                .collect(),
+        }
+    }
+
+    fn models_app() -> App {
+        let mut app = make_app();
+        app.current_tab = Tab::Models;
+        app.sort_field = SortField::Cost;
+        app.sort_direction = SortDirection::Descending;
+        app.data.models = vec![
+            trend_model("cheap", 1.0, &["2026-05-01"]),
+            trend_model("target", 5.0, &["2026-05-01", "2026-05-03", "2026-05-02"]),
+            trend_model("pricey", 9.0, &["2026-05-02"]),
+        ];
+        app
+    }
+
+    #[test]
+    fn test_enter_on_models_opens_trend_newest_first_and_esc_restores_list() {
+        let mut app = models_app();
+        app.selected_index = 1; // "target" under cost-descending
+
+        app.handle_key_event(key(KeyCode::Enter));
+
+        assert!(app.is_model_trend_active());
+        assert_eq!(app.model_trend_model().unwrap().model, "target");
+        let dates: Vec<String> = app
+            .get_sorted_model_trend_rows()
+            .iter()
+            .map(|day| day.date.to_string())
+            .collect();
+        assert_eq!(dates, ["2026-05-03", "2026-05-02", "2026-05-01"]);
+        assert_eq!(app.get_current_list_len(), 3);
+
+        app.handle_key_event(key(KeyCode::Esc));
+
+        assert!(!app.is_model_trend_active());
+        assert_eq!(app.sort_field, SortField::Cost);
+        assert_eq!(app.sort_direction, SortDirection::Descending);
+        assert_eq!(app.selected_index, 1);
+        assert_eq!(app.get_current_list_len(), 3);
+    }
+
+    #[test]
+    fn test_sorting_inside_trend_does_not_change_models_sort() {
+        let mut app = models_app();
+        app.selected_index = 1;
+        app.handle_key_event(key(KeyCode::Enter));
+        app.handle_key_event(key(KeyCode::Char('t')));
+        assert_eq!(app.sort_field, SortField::Tokens);
+
+        app.switch_tab(Tab::Daily);
+        app.switch_tab(Tab::Models);
+
+        assert!(!app.is_model_trend_active());
+        assert_eq!(app.sort_field, SortField::Cost);
+    }
+
+    #[test]
+    fn test_update_data_exits_trend_when_its_model_disappears() {
+        let mut app = models_app();
+        app.selected_index = 1;
+        app.handle_key_event(key(KeyCode::Enter));
+        assert!(app.is_model_trend_active());
+
+        app.update_data(UsageData {
+            models: vec![trend_model("cheap", 1.0, &["2026-05-01"])],
+            ..Default::default()
+        });
+
+        assert!(!app.is_model_trend_active());
+        assert_eq!(app.sort_field, SortField::Cost);
     }
 
     #[test]
@@ -5291,6 +5544,8 @@ mod tests {
             cost,
             performance: Default::default(),
             session_count: 1,
+            group_key: String::new(),
+            daily: Vec::new(),
         }
     }
 
@@ -5442,6 +5697,8 @@ mod tests {
                 cost: 10.0,
                 performance: Default::default(),
                 session_count: 1,
+                group_key: String::new(),
+                daily: Vec::new(),
             },
             ModelUsage {
                 model: "gpt-5".to_string(),
@@ -5454,6 +5711,8 @@ mod tests {
                 cost: 1.0,
                 performance: Default::default(),
                 session_count: 1,
+                group_key: String::new(),
+                daily: Vec::new(),
             },
         ];
         app.build_model_shade_map();
@@ -5511,6 +5770,8 @@ mod tests {
                 cost: 10.0,
                 performance: Default::default(),
                 session_count: 1,
+                group_key: String::new(),
+                daily: Vec::new(),
             },
             ModelUsage {
                 model: "sonnet-shared".to_string(),
@@ -5523,6 +5784,8 @@ mod tests {
                 cost: 5.0,
                 performance: Default::default(),
                 session_count: 1,
+                group_key: String::new(),
+                daily: Vec::new(),
             },
         ];
         app.build_model_shade_map();
@@ -5559,6 +5822,8 @@ mod tests {
             cost: 3.0,
             performance: Default::default(),
             session_count: 1,
+            group_key: String::new(),
+            daily: Vec::new(),
         };
         app.data.models = vec![
             ModelUsage {

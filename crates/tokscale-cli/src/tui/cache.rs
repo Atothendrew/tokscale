@@ -152,6 +152,8 @@ struct CachedModelUsage {
     #[serde(default)]
     performance: ModelPerformance,
     session_count: u32,
+    #[serde(default)]
+    group_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,6 +290,7 @@ impl From<&ModelUsage> for CachedModelUsage {
             cost: m.cost,
             performance: m.performance.clone(),
             session_count: m.session_count,
+            group_key: m.group_key.clone(),
         }
     }
 }
@@ -310,6 +313,8 @@ impl From<CachedModelUsage> for ModelUsage {
             cost: m.cost,
             performance: m.performance,
             session_count: m.session_count,
+            group_key: m.group_key,
+            daily: Vec::new(),
         }
     }
 }

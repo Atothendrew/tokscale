@@ -175,6 +175,10 @@ fn current_count_label(app: &App) -> String {
         }
     };
     match app.current_tab {
+        Tab::Models if app.is_model_trend_active() => format_count(
+            app.get_sorted_model_trend_rows().len(),
+            MessageKey::CountDays,
+        ),
         Tab::Overview | Tab::Models => format_count(app.data.models.len(), MessageKey::CountModels),
         Tab::Agents => format_count(app.data.agents.len(), MessageKey::CountAgents),
         Tab::Daily if app.is_daily_detail_active() => format_count(
@@ -236,6 +240,14 @@ fn render_help_row(frame: &mut Frame, app: &App, area: Rect) {
                 spans.push(Span::styled("↵", hint_style));
             }
         }
+        if app.current_tab == Tab::Models {
+            spans.push(Span::styled("·", Style::default().fg(app.theme.muted)));
+            if app.is_model_trend_active() {
+                spans.push(Span::styled("esc", hint_style));
+            } else {
+                spans.push(Span::styled("↵", hint_style));
+            }
+        }
         if app.current_tab == Tab::Hourly {
             spans.push(Span::styled("·", Style::default().fg(app.theme.muted)));
             spans.push(Span::styled("v", hint_style));
@@ -266,6 +278,14 @@ fn render_help_row(frame: &mut Frame, app: &App, area: Rect) {
         }
         if app.current_tab == Tab::Monthly {
             if app.is_monthly_detail_active() {
+                spans.push(Span::styled(tr(lang, MessageKey::HelpBack), hint_style));
+            } else {
+                spans.push(Span::styled(tr(lang, MessageKey::HelpDetails), hint_style));
+            }
+            spans.push(Span::styled(" • ", Style::default().fg(app.theme.muted)));
+        }
+        if app.current_tab == Tab::Models {
+            if app.is_model_trend_active() {
                 spans.push(Span::styled(tr(lang, MessageKey::HelpBack), hint_style));
             } else {
                 spans.push(Span::styled(tr(lang, MessageKey::HelpDetails), hint_style));
