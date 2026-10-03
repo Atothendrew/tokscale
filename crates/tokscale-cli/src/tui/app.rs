@@ -207,6 +207,7 @@ pub struct DailyDetailRow<'a> {
     pub tokens: &'a TokenBreakdown,
     pub cost: f64,
     pub messages: u64,
+    pub ms_per_1k_tokens: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -2461,6 +2462,7 @@ impl App {
                         tokens: &model_info.tokens,
                         cost: model_info.cost,
                         messages: model_info.messages,
+                        ms_per_1k_tokens: model_info.performance.ms_per_1k_tokens,
                     })
             })
             .collect();
@@ -3362,6 +3364,7 @@ mod tests {
                     tokens,
                     cost: model_cost,
                     messages: 1,
+                    performance: Default::default(),
                 },
             );
         }

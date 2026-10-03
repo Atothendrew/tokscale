@@ -83,6 +83,9 @@ pub struct DailyModelInfo {
     pub tokens: TokenBreakdown,
     pub cost: f64,
     pub messages: u64,
+    /// Generation speed for this model on this day, accumulated the same way
+    /// as [`ModelUsage::performance`] so the two views agree.
+    pub performance: ModelPerformance,
 }
 
 #[derive(Debug, Clone)]
@@ -877,6 +880,7 @@ impl DataLoader {
                         tokens: TokenBreakdown::default(),
                         cost: 0.0,
                         messages: 0,
+                        performance: ModelPerformance::default(),
                     });
 
                 model_info.tokens.input = model_info
@@ -903,6 +907,9 @@ impl DataLoader {
                 model_info.messages = model_info
                     .messages
                     .saturating_add(msg.message_count.max(0) as u64);
+                model_info
+                    .performance
+                    .record_message(positive_unified_token_total(&msg.tokens), msg.duration_ms);
             }
 
             // Hourly aggregation: derive hour from timestamp (Unix ms),
@@ -1290,7 +1297,17 @@ impl DataLoader {
                 .then_with(|| a.agent.cmp(&b.agent))
         });
 
-        let mut daily: Vec<DailyUsage> = daily_map.into_values().collect();
+        let mut daily: Vec<DailyUsage> = daily_map
+            .into_values()
+            .map(|mut day| {
+                for source in day.source_breakdown.values_mut() {
+                    for model in source.models.values_mut() {
+                        model.performance.finalize(model.tokens.total() as i64);
+                    }
+                }
+                day
+            })
+            .collect();
         daily.sort_by_key(|b| std::cmp::Reverse(b.date));
 
         let mut hourly: Vec<HourlyUsage> = hourly_map.into_values().collect();
@@ -2392,6 +2409,57 @@ mod tests {
         assert_eq!(usage.models[0].client, "claude, qwen");
         assert_eq!(usage.models[0].session_count, 2);
         assert_eq!(usage.models[0].cost, 4.0);
+    }
+
+    #[test]
+    fn test_aggregate_messages_tracks_speed_per_day_per_model() {
+        let timed = |date: &str, session: &str, duration_ms: Option<i64>| {
+            let mut msg = make_workspace_message(
+                "claude",
+                "claude-sonnet-4-5-20250929",
+                "anthropic",
+                session,
+                1.0,
+                None,
+                None,
+            );
+            msg.date = date.to_string();
+            msg.duration_ms = duration_ms;
+            msg
+        };
+        // 15 tokens per message: 30ms on day one is 2000ms/1K, 15ms on day
+        // two is 1000ms/1K. The untimed message adds tokens but no timing.
+        let usage = DataLoader::new(None)
+            .aggregate_messages(
+                vec![
+                    timed("2025-01-01", "session-1", Some(30)),
+                    timed("2025-01-01", "session-2", None),
+                    timed("2025-01-02", "session-3", Some(15)),
+                ],
+                &GroupBy::Model,
+            )
+            .unwrap();
+
+        let speed_on = |date: &str| {
+            let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
+            let day = usage.daily.iter().find(|day| day.date == date).unwrap();
+            let model = day.source_breakdown["claude"]
+                .models
+                .values()
+                .next()
+                .unwrap();
+            model.performance.clone()
+        };
+
+        let day_one = speed_on("2025-01-01");
+        assert_eq!(day_one.ms_per_1k_tokens, Some(2000.0));
+        assert_eq!(day_one.sample_count, 1);
+        assert!((day_one.token_coverage - 0.5).abs() < 1e-9);
+        assert_eq!(speed_on("2025-01-02").ms_per_1k_tokens, Some(1000.0));
+
+        // The Models tab sees the same messages across both days.
+        assert_eq!(usage.models[0].performance.timed_tokens, 30);
+        assert_eq!(usage.models[0].performance.total_duration_ms, 45);
     }
 
     #[test]

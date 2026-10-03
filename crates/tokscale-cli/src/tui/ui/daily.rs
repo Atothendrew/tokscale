@@ -4,8 +4,8 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 use super::widgets::{
     ambient_stable_scrollbar, format_cache_hit_rate, format_cost, format_cost_per_million,
-    format_tokens, get_client_display_name, get_provider_display_name, total_tokens_cell,
-    truncate_text, viewport_scrollbar_state, AMBIENT_STABLE_BORDER_SET,
+    format_ms_per_1k, format_tokens, get_client_display_name, get_provider_display_name,
+    total_tokens_cell, truncate_text, viewport_scrollbar_state, AMBIENT_STABLE_BORDER_SET,
 };
 use crate::tui::app::{App, SortDirection, SortField};
 use crate::tui::i18n::{tr, MessageKey, TuiLanguage};
@@ -139,7 +139,9 @@ fn detail_header_labels(
         tr(lang, MessageKey::ColCacheWrite),
         tr(lang, MessageKey::ColCacheHit),
         tr(lang, MessageKey::ColTotal),
+        tr(lang, MessageKey::ColMsPer1k),
         tr(lang, MessageKey::ColCost),
+        tr(lang, MessageKey::ColCostPer1M),
     ]
 }
 
@@ -409,6 +411,8 @@ fn detail_header_widths(is_narrow: bool, is_very_narrow: bool) -> Vec<Constraint
         Constraint::Length(8),
         Constraint::Length(10),
         Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(10),
     ]
 }
 
@@ -482,7 +486,7 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
             .map(|(i, h)| {
                 let indicator = match (i, is_narrow, is_very_narrow) {
                     (10, false, false) => sort_indicator(SortField::Tokens),
-                    (11, false, false) => sort_indicator(SortField::Cost),
+                    (12, false, false) => sort_indicator(SortField::Cost),
                     (3, true, false) => sort_indicator(SortField::Tokens),
                     (4, true, false) => sort_indicator(SortField::Cost),
                     (1, _, true) => sort_indicator(SortField::Cost),
@@ -562,7 +566,11 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
                     ))
                     .style(app.theme.count_style()),
                     total_tokens_cell(row.tokens.total(), &app.theme),
+                    Cell::from(format_ms_per_1k(row.ms_per_1k_tokens))
+                        .style(app.theme.hint_key_style()),
                     Cell::from(format_cost(row.cost)).style(Style::default().fg(Color::Green)),
+                    Cell::from(format_cost_per_million(row.cost, row.tokens.total()))
+                        .style(Style::default().fg(Color::Rgb(150, 200, 150))),
                 ]
             };
 
@@ -707,6 +715,7 @@ mod tests {
                 tokens: TokenBreakdown::default(),
                 cost,
                 messages: 10,
+                performance: Default::default(),
             },
         );
         day.source_breakdown.insert(
@@ -718,6 +727,29 @@ mod tests {
             },
         );
         day
+    }
+
+    #[test]
+    fn detail_rows_show_speed_and_cost_per_million() {
+        let mut app = make_app(200);
+        let date = NaiveDate::from_ymd_opt(2026, 5, 29).unwrap();
+        let mut day = day_with_detail(date, 3.0);
+        let model = day
+            .source_breakdown
+            .get_mut("claude-code")
+            .unwrap()
+            .models
+            .get_mut("claude-sonnet-4")
+            .unwrap();
+        model.tokens.input = 1_000_000;
+        model.performance = tokscale_core::ModelPerformance::from_totals(45, 1_000, 1);
+        app.data.daily = vec![day];
+        app.selected_daily_detail_date = Some(date);
+
+        let body = render_body(&mut app, 200, 12);
+        let row = body.lines().nth(2).unwrap_or_default();
+        assert!(row.contains("45ms"), "expected ms/1K cell\n{body}");
+        assert!(row.contains("$3.00"), "expected Cost/1M cell\n{body}");
     }
 
     /// The rendered header row of the main table.
@@ -782,10 +814,10 @@ mod tests {
                 lang,
                 &detail_header_labels(lang, false, false),
                 &detail_header_widths(false, false),
-                // Tokens and Cost carry the arrows in the detail table.
+                // Total and Cost carry the arrows in the detail table.
                 &[
                     false, false, false, false, false, false, false, false, false, false, true,
-                    true,
+                    false, true, false,
                 ],
             );
         }
