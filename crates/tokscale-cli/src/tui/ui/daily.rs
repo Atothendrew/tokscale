@@ -111,6 +111,7 @@ fn detail_header_labels(
     lang: TuiLanguage,
     is_narrow: bool,
     is_very_narrow: bool,
+    with_speed: bool,
 ) -> Vec<&'static str> {
     if is_very_narrow {
         return vec![
@@ -127,7 +128,7 @@ fn detail_header_labels(
             tr(lang, MessageKey::ColCost),
         ];
     }
-    vec![
+    let mut labels = vec![
         tr(lang, MessageKey::ColRank),
         tr(lang, MessageKey::ColModel),
         tr(lang, MessageKey::ColProvider),
@@ -139,11 +140,21 @@ fn detail_header_labels(
         tr(lang, MessageKey::ColCacheWrite),
         tr(lang, MessageKey::ColCacheHit),
         tr(lang, MessageKey::ColTotal),
-        tr(lang, MessageKey::ColMsPer1k),
-        tr(lang, MessageKey::ColCost),
-        tr(lang, MessageKey::ColCostPer1M),
-    ]
+    ];
+    if with_speed {
+        labels.push(tr(lang, MessageKey::ColMsPer1k));
+    }
+    labels.push(tr(lang, MessageKey::ColCost));
+    if with_speed {
+        labels.push(tr(lang, MessageKey::ColCostPer1M));
+    }
+    labels
 }
+
+/// Width the full detail table needs with the `ms/1K` and `Cost/1M` columns:
+/// 147 fixed/minimum cells, 13 column gaps, and the block border. Below it
+/// those two columns are dropped so the original 140-cell layout still fits.
+const DETAIL_SPEED_COLUMNS_MIN_WIDTH: u16 = 162;
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.is_daily_detail_active() {
@@ -385,7 +396,11 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// The daily *detail* table's column widths, index-aligned with
 /// [`detail_header_labels`]. Same rationale as [`header_widths`].
-fn detail_header_widths(is_narrow: bool, is_very_narrow: bool) -> Vec<Constraint> {
+fn detail_header_widths(
+    is_narrow: bool,
+    is_very_narrow: bool,
+    with_speed: bool,
+) -> Vec<Constraint> {
     if is_very_narrow {
         return vec![Constraint::Percentage(70), Constraint::Percentage(30)];
     }
@@ -398,7 +413,7 @@ fn detail_header_widths(is_narrow: bool, is_very_narrow: bool) -> Vec<Constraint
             Constraint::Percentage(13),
         ];
     }
-    vec![
+    let mut widths = vec![
         Constraint::Length(3),
         Constraint::Min(20),
         Constraint::Length(16),
@@ -411,9 +426,12 @@ fn detail_header_widths(is_narrow: bool, is_very_narrow: bool) -> Vec<Constraint
         Constraint::Length(8),
         Constraint::Length(10),
         Constraint::Length(10),
-        Constraint::Length(10),
-        Constraint::Length(10),
-    ]
+    ];
+    if with_speed {
+        // ms/1K and Cost/1M, both 10 cells like their neighbours.
+        widths.extend([Constraint::Length(10), Constraint::Length(10)]);
+    }
+    widths
 }
 
 fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -466,7 +484,9 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
     let metric_cache_write_style = app.theme.metric_cache_write_style();
     let striped_row_style = app.theme.striped_row_style();
 
-    let header_cells = detail_header_labels(lang, is_narrow, is_very_narrow);
+    let with_speed = !is_narrow && inner.width.saturating_add(2) >= DETAIL_SPEED_COLUMNS_MIN_WIDTH;
+    let header_cells = detail_header_labels(lang, is_narrow, is_very_narrow, with_speed);
+    let cost_column = if with_speed { 12 } else { 11 };
 
     let sort_indicator = |field: SortField| -> &'static str {
         if sort_field == field {
@@ -486,7 +506,7 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
             .map(|(i, h)| {
                 let indicator = match (i, is_narrow, is_very_narrow) {
                     (10, false, false) => sort_indicator(SortField::Tokens),
-                    (12, false, false) => sort_indicator(SortField::Cost),
+                    (i, false, false) if i == cost_column => sort_indicator(SortField::Cost),
                     (3, true, false) => sort_indicator(SortField::Tokens),
                     (4, true, false) => sort_indicator(SortField::Cost),
                     (1, _, true) => sort_indicator(SortField::Cost),
@@ -543,7 +563,7 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
                     Cell::from(format_cost(row.cost)).style(Style::default().fg(Color::Green)),
                 ]
             } else {
-                vec![
+                let mut cells = vec![
                     Cell::from(format!("{}", idx + 1)).style(Style::default().fg(theme_muted)),
                     Cell::from(truncate_text(row.model, 30)).style(
                         Style::default()
@@ -566,12 +586,23 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
                     ))
                     .style(app.theme.count_style()),
                     total_tokens_cell(row.tokens.total(), &app.theme),
-                    Cell::from(format_ms_per_1k(row.ms_per_1k_tokens))
-                        .style(app.theme.hint_key_style()),
+                ];
+                if with_speed {
+                    cells.push(
+                        Cell::from(format_ms_per_1k(row.ms_per_1k_tokens))
+                            .style(app.theme.hint_key_style()),
+                    );
+                }
+                cells.push(
                     Cell::from(format_cost(row.cost)).style(Style::default().fg(Color::Green)),
-                    Cell::from(format_cost_per_million(row.cost, row.tokens.total()))
-                        .style(Style::default().fg(Color::Rgb(150, 200, 150))),
-                ]
+                );
+                if with_speed {
+                    cells.push(
+                        Cell::from(format_cost_per_million(row.cost, row.tokens.total()))
+                            .style(Style::default().fg(Color::Rgb(150, 200, 150))),
+                    );
+                }
+                cells
             };
 
             let row_style = if is_selected {
@@ -586,7 +617,7 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let widths = detail_header_widths(is_narrow, is_very_narrow);
+    let widths = detail_header_widths(is_narrow, is_very_narrow, with_speed);
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -741,15 +772,31 @@ mod tests {
             .models
             .get_mut("claude-sonnet-4")
             .unwrap();
-        model.tokens.input = 1_000_000;
-        model.performance = tokscale_core::ModelPerformance::from_totals(45, 1_000, 1);
-        app.data.daily = vec![day];
+        // 2M tokens for $3.00, so Cost/1M ($1.50) differs from the raw cost
+        // and the assertion proves that column independently.
+        model.tokens.input = 2_000_000;
+        model.performance = tokscale_core::ModelPerformance::from_totals(90, 2_000, 1);
+        app.data.daily = vec![day.clone()];
         app.selected_daily_detail_date = Some(date);
 
         let body = render_body(&mut app, 200, 12);
         let row = body.lines().nth(2).unwrap_or_default();
         assert!(row.contains("45ms"), "expected ms/1K cell\n{body}");
-        assert!(row.contains("$3.00"), "expected Cost/1M cell\n{body}");
+        assert!(row.contains("$3.00"), "expected Cost cell\n{body}");
+        assert!(row.contains("$1.50"), "expected Cost/1M cell\n{body}");
+
+        // Below the speed layout's width the two new columns drop out instead
+        // of clipping the original 140-cell table.
+        let mut narrow = make_app(150);
+        narrow.data.daily = vec![day];
+        narrow.selected_daily_detail_date = Some(date);
+        let body = render_body(&mut narrow, 150, 12);
+        let row = body.lines().nth(2).unwrap_or_default();
+        assert!(
+            !row.contains("45ms"),
+            "speed column must drop below 162\n{body}"
+        );
+        assert!(row.contains("$3.00"), "Cost stays visible\n{body}");
     }
 
     /// The rendered header row of the main table.
@@ -812,12 +859,22 @@ mod tests {
             assert_header_layout_fits(
                 "daily-detail/wide",
                 lang,
-                &detail_header_labels(lang, false, false),
-                &detail_header_widths(false, false),
+                &detail_header_labels(lang, false, false, true),
+                &detail_header_widths(false, false, true),
                 // Total and Cost carry the arrows in the detail table.
                 &[
                     false, false, false, false, false, false, false, false, false, false, true,
                     false, true, false,
+                ],
+            );
+            assert_header_layout_fits(
+                "daily-detail/wide-without-speed",
+                lang,
+                &detail_header_labels(lang, false, false, false),
+                &detail_header_widths(false, false, false),
+                &[
+                    false, false, false, false, false, false, false, false, false, false, true,
+                    true,
                 ],
             );
         }
@@ -867,24 +924,36 @@ mod tests {
     /// the fitting width is measured from the `Length`s plus Model's minimum.
     #[test]
     fn every_language_renders_its_full_detail_header_once_the_layout_fits() {
-        let widths = detail_header_widths(false, false);
-        let fixed: u16 = widths
-            .iter()
-            .map(|constraint| match constraint {
-                Constraint::Length(cells) => *cells,
-                // The sole `Min`, which is Model's floor.
-                Constraint::Min(cells) => *cells,
-                other => unreachable!("unexpected constraint {other:?}"),
-            })
-            .sum();
-        let needed = fixed + widths.len().saturating_sub(1) as u16 + 2;
-        for width in [needed, needed + 20, 200] {
+        let needed_for = |with_speed: bool| {
+            let widths = detail_header_widths(false, false, with_speed);
+            let fixed: u16 = widths
+                .iter()
+                .map(|constraint| match constraint {
+                    Constraint::Length(cells) => *cells,
+                    // The sole `Min`, which is Model's floor.
+                    Constraint::Min(cells) => *cells,
+                    other => unreachable!("unexpected constraint {other:?}"),
+                })
+                .sum();
+            fixed + widths.len().saturating_sub(1) as u16 + 2
+        };
+        // The speed columns appear exactly when their layout fits, and the
+        // layout without them keeps the 140 cells it needed before.
+        assert_eq!(needed_for(true), DETAIL_SPEED_COLUMNS_MIN_WIDTH);
+        assert_eq!(needed_for(false), 140);
+        let cases = [
+            (false, needed_for(false)),
+            (false, DETAIL_SPEED_COLUMNS_MIN_WIDTH - 1),
+            (true, DETAIL_SPEED_COLUMNS_MIN_WIDTH),
+            (true, 200),
+        ];
+        for (with_speed, width) in cases {
             for lang in TuiLanguage::ALL {
                 assert_headers_render_in_full(
                     &format!("daily-detail(width={width})"),
                     lang,
                     &detail_header_for(lang, width),
-                    &detail_header_labels(lang, false, false),
+                    &detail_header_labels(lang, false, false, with_speed),
                 );
             }
         }

@@ -1460,13 +1460,16 @@ impl DataLoader {
         let mut models: Vec<ModelUsage> = model_map
             .into_values()
             .map(|mut model| {
-                model.performance.finalize(model.tokens.total() as i64);
+                model
+                    .performance
+                    .finalize(i64::try_from(model.tokens.total()).unwrap_or(i64::MAX));
                 model.daily = model_days
                     .remove(&model.group_key)
                     .unwrap_or_default()
                     .into_values()
                     .map(|mut day| {
-                        day.performance.finalize(day.tokens.total() as i64);
+                        day.performance
+                            .finalize(i64::try_from(day.tokens.total()).unwrap_or(i64::MAX));
                         day
                     })
                     .collect();
@@ -1499,7 +1502,9 @@ impl DataLoader {
             .map(|mut day| {
                 for source in day.source_breakdown.values_mut() {
                     for model in source.models.values_mut() {
-                        model.performance.finalize(model.tokens.total() as i64);
+                        model
+                            .performance
+                            .finalize(i64::try_from(model.tokens.total()).unwrap_or(i64::MAX));
                     }
                 }
                 day

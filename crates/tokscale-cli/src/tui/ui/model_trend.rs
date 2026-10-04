@@ -42,6 +42,9 @@ fn header_labels(lang: TuiLanguage, is_narrow: bool, is_very_narrow: bool) -> Ve
     ]
 }
 
+/// Width the wide trend layout needs (see `header_widths`).
+const MODEL_TREND_WIDE_MIN_WIDTH: u16 = 109;
+
 /// The trend table's column widths, index-aligned with [`header_labels`].
 fn header_widths(is_narrow: bool, is_very_narrow: bool) -> Vec<Constraint> {
     if is_very_narrow {
@@ -122,7 +125,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let is_narrow = app.is_narrow();
+    // The wide layout needs 98 fixed cells, 9 column gaps and the 2-cell
+    // block border; below that ratatui would shrink and clip every column.
+    let is_narrow = area.width < MODEL_TREND_WIDE_MIN_WIDTH;
     let is_very_narrow = app.is_very_narrow();
     let sort_field = app.sort_field;
     let sort_direction = app.sort_direction;

@@ -1716,6 +1716,11 @@ impl App {
     }
 
     fn reset_selection(&mut self) {
+        // Leaving an open trend must hand the Models list back its own sort,
+        // not the trend's Date sort.
+        if self.current_tab == Tab::Models && self.is_model_trend_active() {
+            (self.sort_field, self.sort_direction) = self.models_list_sort;
+        }
         self.scroll_offset = 0;
         self.selected_index = 0;
         self.selected_daily_detail_date = None;
@@ -1732,6 +1737,13 @@ impl App {
     }
 
     fn switch_tab(&mut self, target: Tab) {
+        // `persist_current_sort` skips the trend's borrowed sort; save the
+        // Models list's own sort instead so returning to the tab restores it.
+        if self.current_tab == Tab::Models && self.is_model_trend_active() && target != Tab::Models
+        {
+            self.tab_sort_state
+                .insert(Tab::Models, self.models_list_sort);
+        }
         self.persist_current_sort();
 
         self.current_tab = target;
@@ -2208,9 +2220,18 @@ impl App {
         let selected = self
             .get_sorted_models()
             .get(self.selected_index)
-            .map(|m| (m.group_key.clone(), m.model.clone()));
+            .map(|m| (m.group_key.clone(), m.model.clone(), m.daily.is_empty()));
 
-        if let Some((key, model)) = selected {
+        // Rows painted from the TUI cache carry no daily series, and a cache
+        // written before `groupKey` existed gives every row the same empty
+        // key. Opening a trend from either would show a blank or a wrong
+        // model, so wait for the background refresh to deliver real rows.
+        if matches!(&selected, Some((key, _, no_daily)) if key.is_empty() || *no_daily) {
+            self.set_status("Daily trend is still loading; try again after the refresh");
+            return;
+        }
+
+        if let Some((key, model, _)) = selected {
             self.models_list_selected_index = self.selected_index;
             self.models_list_scroll_offset = self.scroll_offset;
             self.models_list_sort = (self.sort_field, self.sort_direction);
@@ -4292,6 +4313,60 @@ mod tests {
 
         assert!(!app.is_model_trend_active());
         assert_eq!(app.sort_field, SortField::Cost);
+    }
+
+    #[test]
+    fn test_enter_does_not_open_a_trend_for_rows_painted_from_cache() {
+        // Cache hits rebuild rows without a daily series; a cache from before
+        // `groupKey` also gives every row the same empty key. Neither may open
+        // a trend until the background refresh delivers real rows.
+        let mut cached = models_app();
+        for model in &mut cached.data.models {
+            model.daily.clear();
+        }
+        cached.selected_index = 1;
+        cached.handle_key_event(key(KeyCode::Enter));
+        assert!(!cached.is_model_trend_active());
+        assert_eq!(cached.sort_field, SortField::Cost);
+
+        let mut legacy = models_app();
+        for model in &mut legacy.data.models {
+            model.group_key.clear();
+        }
+        legacy.selected_index = 1;
+        legacy.handle_key_event(key(KeyCode::Enter));
+        assert!(!legacy.is_model_trend_active());
+    }
+
+    #[test]
+    fn test_reset_selection_inside_a_trend_restores_the_models_list_sort() {
+        let mut app = models_app();
+        app.selected_index = 1;
+        app.handle_key_event(key(KeyCode::Enter));
+        assert_eq!(app.sort_field, SortField::Date);
+
+        app.reset_selection();
+
+        assert!(!app.is_model_trend_active());
+        assert_eq!(app.sort_field, SortField::Cost);
+        assert_eq!(app.sort_direction, SortDirection::Descending);
+    }
+
+    #[test]
+    fn test_switching_tabs_from_a_trend_keeps_a_custom_models_list_sort() {
+        let mut app = models_app();
+        app.handle_key_event(key(KeyCode::Char('t')));
+        let list_sort = (app.sort_field, app.sort_direction);
+        assert_eq!(list_sort.0, SortField::Tokens);
+        app.selected_index = 1;
+        app.handle_key_event(key(KeyCode::Enter));
+        assert!(app.is_model_trend_active());
+
+        app.switch_tab(Tab::Daily);
+        app.switch_tab(Tab::Models);
+
+        assert!(!app.is_model_trend_active());
+        assert_eq!((app.sort_field, app.sort_direction), list_sort);
     }
 
     #[test]
